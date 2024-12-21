@@ -1,0 +1,13 @@
+[package]
+name = "netns"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+nix = { version = "0.29", features = [
+    "dir",
+    "fs",
+    "mount",
+    "process",
+    "sched",
+] }
