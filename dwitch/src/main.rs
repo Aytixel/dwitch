@@ -1,24 +1,19 @@
-use std::{
-    collections::HashMap, error::Error, fs::read_to_string, io, str::FromStr, sync::Arc,
-    time::Duration,
-};
+use std::{collections::HashMap, error::Error, sync::Arc, time::Duration};
 
 use cache::Cache;
 use clap::Parser;
 use config::Config;
+use protocol::CONFIGURATION_SWITCH_ID;
 use socket::{client::client, server::server};
 use tap::initiate_tap_table;
-use tappers::MacAddr;
 use tokio::{sync::RwLock, task::spawn, time::sleep};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 mod cache;
 mod config;
-mod packet;
 mod socket;
 mod tap;
 
-const BROADCAST_MAC: [u8; 6] = [0u8; 6];
 const MAX_BUFFER_SIZE: usize = 65535;
 
 #[tokio::main]
@@ -29,17 +24,20 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .init();
 
     // let config = Config::load()?;
-
-    // tracing::info!("{config:#?}");
-
     let config = Config::parse();
 
     tracing::info!("{config:#?}");
+
+    if config.switch_id == CONFIGURATION_SWITCH_ID {
+        tracing::error!("Switch id can't be {CONFIGURATION_SWITCH_ID}");
+        return Ok(());
+    }
 
     let cache = Cache::load().await.unwrap_or_default();
     let client_table = Arc::new(RwLock::new(HashMap::new()));
     let switch_table = Arc::new(RwLock::new(cache.switch_table));
     let tap_table = Arc::new(RwLock::new(initiate_tap_table(
+        config.switch_id,
         &cache.vrf_table,
         client_table.clone(),
         switch_table.clone(),
@@ -84,13 +82,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
             }
         }
     }
-}
-
-fn get_interface_mac(interface_name: &str) -> io::Result<MacAddr> {
-    MacAddr::from_str(
-        read_to_string(format!("/sys/class/net/{interface_name}/address"))?.trim_end(),
-    )
-    .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error.as_str()))
 }
 
 trait BufferExt {
