@@ -208,8 +208,8 @@ impl Netns {
         let initial_netns = File::open(SELF_NETNS_PATH)?;
         let target_netns = File::open(&self.path())?;
 
-        unshare(CloneFlags::CLONE_NEWNS)?;
-        setns(target_netns, CloneFlags::CLONE_NEWNS)?;
+        unshare(CloneFlags::CLONE_NEWNET)?;
+        setns(target_netns, CloneFlags::CLONE_NEWNET)?;
 
         Ok(NetnsHandle(initial_netns))
     }
@@ -228,7 +228,7 @@ pub struct NetnsHandle(File);
 
 impl NetnsHandle {
     pub fn close(self) -> nix::Result<()> {
-        unshare(CloneFlags::CLONE_NEWNS)?;
-        setns(self.0, CloneFlags::CLONE_NEWNS)
+        unshare(CloneFlags::CLONE_NEWNET)?;
+        setns(self.0, CloneFlags::CLONE_NEWNET)
     }
 }
