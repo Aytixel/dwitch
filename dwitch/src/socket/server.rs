@@ -1,6 +1,6 @@
 use std::{error::Error, sync::Arc, time::Duration};
 
-use protocol::{Packet, Ping, VrfAction};
+use protocol::{Packet, Ping, VrfAction, CONFIGURATION_SWITCH_ID};
 use tokio::{
     io::AsyncWriteExt,
     net::{TcpListener, TcpStream},
@@ -96,6 +96,7 @@ async fn server_connection(
             Packet::VrfAction(vrf_action) => {
                 process_vrf_action(
                     server_switch_id,
+                    client_switch_id,
                     &mut stream,
                     tap_table.clone(),
                     vrf_table.clone(),
@@ -123,6 +124,7 @@ async fn server_connection(
 
 async fn process_vrf_action(
     server_switch_id: SwitchId,
+    client_switch_id: SwitchId,
     stream: &mut TcpStream,
     tap_table: Arc<RwLock<TapTable>>,
     vrf_table: Arc<RwLock<VrfTable>>,
@@ -130,14 +132,16 @@ async fn process_vrf_action(
     switch_table: Arc<RwLock<SwitchTable>>,
     vrf_action: VrfAction,
 ) {
-    match &vrf_action {
-        VrfAction::Create(_)
-        | VrfAction::Delete { .. }
-        | VrfAction::AddMember { .. }
-        | VrfAction::RemoveMember { .. } => {
-            broadcast_packet(client_table.clone(), Packet::from(vrf_action.clone())).await
+    if client_switch_id == CONFIGURATION_SWITCH_ID {
+        match &vrf_action {
+            VrfAction::Create(_)
+            | VrfAction::Delete { .. }
+            | VrfAction::AddMember { .. }
+            | VrfAction::RemoveMember { .. } => {
+                broadcast_packet(client_table.clone(), Packet::from(vrf_action.clone())).await
+            }
+            _ => {}
         }
-        _ => {}
     }
 
     match vrf_action {
