@@ -1,6 +1,6 @@
 use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
 
-use protocol::Packet;
+use protocol::{Packet, PacketSerializer, Vrf};
 use tokio::{
     io::AsyncWriteExt,
     net::TcpStream,
@@ -11,7 +11,7 @@ use tokio::{
     time::sleep,
 };
 
-use crate::{cache::Vrf, config::SwitchId, socket::exchange_switch_id};
+use crate::{config::SwitchId, socket::exchange_switch_id};
 
 pub type ClientTable = HashMap<SwitchId, Sender<Packet>>;
 

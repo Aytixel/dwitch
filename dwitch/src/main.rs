@@ -1,4 +1,4 @@
-use std::{collections::HashMap, error::Error, sync::Arc, time::Duration};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use cache::Cache;
 use clap::Parser;
@@ -17,7 +17,12 @@ mod tap;
 const MAX_BUFFER_SIZE: usize = 65535;
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
+async fn main() -> eyre::Result<()> {
+    color_eyre::install()?;
+
+    #[cfg(feature = "debug_console")]
+    console_subscriber::init();
+    #[cfg(not(feature = "debug_console"))]
     tracing_subscriber::registry()
         .with(EnvFilter::from_env("DWITCH_LOG"))
         .with(tracing_subscriber::fmt::layer())
@@ -65,7 +70,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     }
 
     loop {
-        sleep(Duration::from_secs(10)).await;
+        sleep(Duration::from_secs(1)).await;
 
         {
             let switch_table = switch_table.read().await;

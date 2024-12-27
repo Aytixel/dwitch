@@ -1,3 +1,4 @@
+use protocol::PacketSerializer;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
@@ -9,10 +10,7 @@ pub mod client;
 pub mod server;
 
 async fn exchange_switch_id(stream: &mut TcpStream, switch_id: SwitchId) -> Option<SwitchId> {
-    if let Err(error) = stream
-        .write_all(&bincode::serialize(&switch_id).expect("Can't serialize switch id"))
-        .await
-    {
+    if let Err(error) = stream.write_all(&switch_id.serialize()).await {
         tracing::error!("Server can't send switch id: {error}");
         return None;
     }
@@ -32,7 +30,7 @@ async fn exchange_switch_id(stream: &mut TcpStream, switch_id: SwitchId) -> Opti
 
     let buffer = buffer[..length].as_mut();
 
-    Some(match bincode::deserialize(&buffer) {
+    Some(match SwitchId::deserialize(&buffer) {
         Ok(switch_id) => switch_id,
         Err(error) => {
             tracing::error!("Can't deserialize switch_id: {error}");

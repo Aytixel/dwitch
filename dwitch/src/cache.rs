@@ -1,10 +1,7 @@
-use std::{
-    collections::{HashMap, HashSet},
-    error::Error,
-    io,
-};
+use std::{collections::HashMap, error::Error, io};
 
 use common::VrfId;
+use protocol::Vrf;
 use serde::{Deserialize, Serialize};
 use tokio::fs::{read, write};
 
@@ -14,13 +11,6 @@ const CACHE_PATH: &str = "/var/cache/dwitch.cache";
 
 pub type SwitchTable = HashMap<[u8; 6], SwitchId>;
 pub type VrfTable = HashMap<VrfId, Vrf>;
-
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
-pub struct Vrf {
-    pub id: VrfId,
-    pub name: String,
-    pub members: HashSet<SwitchId>,
-}
 
 #[derive(Debug, Default, Deserialize, Serialize)]
 pub struct Cache {

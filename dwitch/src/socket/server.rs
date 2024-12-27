@@ -1,8 +1,8 @@
 use std::{error::Error, sync::Arc, time::Duration};
 
-use protocol::{Packet, Ping, VrfAction};
+use protocol::{Packet, PacketSerializer, Ping, VrfAction};
 use tokio::{
-    io::AsyncReadExt,
+    io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
     spawn,
     sync::RwLock,
@@ -10,7 +10,7 @@ use tokio::{
 };
 
 use crate::{
-    cache::{self, SwitchTable, VrfTable},
+    cache::{SwitchTable, VrfTable},
     config::{Config, SwitchId},
     socket::exchange_switch_id,
     tap::{tap, TapTable},
@@ -33,15 +33,17 @@ pub async fn server(
             Ok((mut stream, address)) => {
                 tracing::debug!("New client from {address}");
 
-                let Some(switch_id) = exchange_switch_id(&mut stream, config.switch_id).await
+                let Some(client_switch_id) =
+                    exchange_switch_id(&mut stream, config.switch_id).await
                 else {
                     continue;
                 };
 
-                tracing::debug!("Client switch id {switch_id}");
+                tracing::debug!("Client switch id {client_switch_id}");
 
                 spawn(server_connection(
-                    switch_id,
+                    config.switch_id,
+                    client_switch_id,
                     stream,
                     tap_table.clone(),
                     vrf_table.clone(),
@@ -58,7 +60,8 @@ pub async fn server(
 }
 
 async fn server_connection(
-    switch_id: SwitchId,
+    server_switch_id: SwitchId,
+    client_switch_id: SwitchId,
     mut stream: TcpStream,
     tap_table: Arc<RwLock<TapTable>>,
     vrf_table: Arc<RwLock<VrfTable>>,
@@ -77,7 +80,7 @@ async fn server_connection(
         };
 
         if length == 0 {
-            continue;
+            break;
         }
 
         let buffer = buffer[..length].as_mut();
@@ -96,19 +99,45 @@ async fn server_connection(
 
         match packet {
             Packet::Ping(Ping) => unimplemented!(),
-            Packet::Vrf(vrf) => {
-                let mut vrf_table = vrf_table.write().await;
+            Packet::VrfAction(vrf_action) => match vrf_action {
+                VrfAction::List(vrf_list) => {
+                    let vrf_table = vrf_table.read().await;
 
-                match vrf.action {
-                    VrfAction::Create(name, members) => {
-                        let vrf = cache::Vrf {
-                            id: vrf.id,
-                            name: name,
-                            members: members.into_iter().collect(),
-                        };
-                        let mut tap_table = tap_table.write().await;
+                    for vrf_list_chunk in vrf_table.values().cloned().collect::<Vec<_>>().chunks(10)
+                    {
+                        if let Err(error) = stream
+                            .write_all(
+                                &Packet::from(VrfAction::List(Some(vrf_list_chunk.to_vec())))
+                                    .serialize(),
+                            )
+                            .await
+                        {
+                            tracing::warn!("Can't send vrf list: {error}");
+                        }
+                    }
 
-                        if vrf.members.contains(&switch_id) {
+                    if let Err(error) = stream
+                        .write_all(&Packet::from(VrfAction::List(Some(Vec::new()))).serialize())
+                        .await
+                    {
+                        tracing::warn!("Can't send vrf list: {error}");
+                    }
+                    if let Err(error) = stream.flush().await {
+                        tracing::warn!("Can't send vrf list: {error}");
+                    }
+                }
+                VrfAction::Create(vrf) => {
+                    let mut vrf_table = vrf_table.write().await;
+
+                    if !vrf_table.contains_key(&vrf.id)
+                        && vrf_table
+                            .values()
+                            .find(|vrf_| vrf_.name == vrf.name)
+                            .is_none()
+                    {
+                        if vrf.members.contains(&server_switch_id) {
+                            let mut tap_table = tap_table.write().await;
+
                             tap_table.insert(
                                 vrf.id,
                                 tap(vrf.clone(), client_table.clone(), switch_table.clone()),
@@ -117,48 +146,55 @@ async fn server_connection(
 
                         vrf_table.insert(vrf.id, vrf);
                     }
-                    VrfAction::Delete => {
-                        let mut tap_table = tap_table.write().await;
+                }
+                VrfAction::Delete { id } => {
+                    let mut vrf_table = vrf_table.write().await;
+                    let mut tap_table = tap_table.write().await;
 
-                        tap_table.remove(&vrf.id);
-                        vrf_table.remove(&vrf.id);
-                    }
-                    VrfAction::AddMember(new_members) => {
-                        if let Some(vrf) = vrf_table.get_mut(&vrf.id) {
-                            let mut tap_table = tap_table.write().await;
+                    tap_table.remove(&id);
+                    vrf_table.remove(&id);
+                }
+                VrfAction::AddMember { id, members } => {
+                    let mut vrf_table = vrf_table.write().await;
 
-                            if new_members.contains(&switch_id) {
+                    if let Some(vrf) = vrf_table.get_mut(&id) {
+                        for new_member in members {
+                            if new_member == server_switch_id {
+                                let mut tap_table = tap_table.write().await;
+
                                 tap_table.insert(
                                     vrf.id,
                                     tap(vrf.clone(), client_table.clone(), switch_table.clone()),
                                 );
                             }
 
-                            for new_member in new_members {
-                                vrf.members.insert(new_member);
-                            }
-                        }
-                    }
-                    VrfAction::RemoveMember(old_members) => {
-                        if let Some(vrf) = vrf_table.get_mut(&vrf.id) {
-                            let mut tap_table = tap_table.write().await;
-
-                            for old_member in old_members {
-                                if old_member == switch_id {
-                                    tap_table.remove(&vrf.id);
-                                }
-
-                                vrf.members.remove(&old_member);
+                            if !vrf.members.contains(&new_member) {
+                                vrf.members.push(new_member);
                             }
                         }
                     }
                 }
-            }
+                VrfAction::RemoveMember { id, members } => {
+                    let mut vrf_table = vrf_table.write().await;
+
+                    if let Some(vrf) = vrf_table.get_mut(&id) {
+                        for old_member in members {
+                            if old_member == server_switch_id {
+                                let mut tap_table = tap_table.write().await;
+
+                                tap_table.remove(&vrf.id);
+                            }
+
+                            vrf.members.retain(|member| *member != old_member);
+                        }
+                    }
+                }
+            },
             Packet::Data(data) => {
                 let tap_table = tap_table.read().await;
 
                 if let Some(tap) = tap_table.get(&data.vrf_id) {
-                    if let Err(error) = tap.send((switch_id, data.data)).await {
+                    if let Err(error) = tap.send((client_switch_id, data.data)).await {
                         tracing::error!(
                             "Can't send data to tap interface for vrf id {}: {error}",
                             data.vrf_id

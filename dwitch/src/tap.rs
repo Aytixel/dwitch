@@ -2,7 +2,7 @@ use std::{collections::HashMap, error::Error, io, sync::Arc};
 
 use common::VrfId;
 use netns::Netns;
-use protocol::{Data, Packet};
+use protocol::{Data, Packet, Vrf};
 use tappers::{tokio::AsyncTap, DeviceState};
 use tokio::{
     spawn,
@@ -13,7 +13,7 @@ use tokio::{
 };
 
 use crate::{
-    cache::{SwitchTable, Vrf, VrfTable},
+    cache::{SwitchTable, VrfTable},
     config::SwitchId,
     socket::client::{broadcast_to_vrf, ClientTable},
     BufferExt, MAX_BUFFER_SIZE,
@@ -86,9 +86,11 @@ async fn tap_connection(
 
                 tracing::debug!("Source mac address {source_mac:?}");
 
-                let mut switch_table = switch_table.write().await;
+                {
+                    let mut switch_table = switch_table.write().await;
 
-                switch_table.insert(source_mac, switch_id);
+                    switch_table.insert(source_mac, switch_id);
+                }
 
                 if let Err(error) = tap.send(&data).await {
                     tracing::error!(
@@ -111,7 +113,6 @@ async fn tap_connection(
             let buffer = &mut buffer[..length];
 
             if length >= 14 {
-                let switch_table = switch_table.read().await;
                 let packet = Packet::from(Data {
                     vrf_id: vrf.id,
                     data: buffer.to_vec(),
@@ -120,10 +121,14 @@ async fn tap_connection(
 
                 tracing::debug!("Destination mac address {destination_mac:?}");
 
-                if let Some(switch_id) = switch_table.get(&destination_mac) {
+                if let Some(switch_id) = {
+                    let switch_table = switch_table.read().await;
+
+                    switch_table.get(&destination_mac).copied()
+                } {
                     let client_table = client_table.read().await;
 
-                    if let Some(client) = client_table.get(switch_id) {
+                    if let Some(client) = client_table.get(&switch_id) {
                         if let Err(error) = client.send(packet).await {
                             tracing::error!(
                                 "Can't send packet to client {switch_id} for vrf {}: {error}",
