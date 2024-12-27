@@ -75,75 +75,77 @@ async fn tap_connection(
 ) {
     let tap = Arc::new(tap);
 
-    spawn({
+    let receiver_task = spawn({
         let tap = tap.clone();
         let vrf = vrf.clone();
         let switch_table = switch_table.clone();
 
         async move {
-            while let Some((switch_id, data)) = receiver.recv().await {
-                let source_mac = get_source_mac(&data);
+            let mut buffer = [0u8; MAX_BUFFER_SIZE];
 
-                tracing::debug!("Source mac address {source_mac:?}");
+            loop {
+                if let Ok(length) = tap.recv(&mut buffer).await {
+                    if length == 0 {
+                        continue;
+                    }
 
-                {
-                    let mut switch_table = switch_table.write().await;
+                    let buffer = &mut buffer[..length];
 
-                    switch_table.insert(source_mac, switch_id);
-                }
+                    if length >= 14 {
+                        let packet = Packet::from(Data {
+                            vrf_id: vrf.id,
+                            data: buffer.to_vec(),
+                        });
+                        let destination_mac = get_destination_mac(&buffer);
 
-                if let Err(error) = tap.send(&data).await {
-                    tracing::error!(
-                        "Can't send data through tap iterface for vrf {}: {error}",
-                        vrf.name
-                    );
+                        tracing::debug!("Destination mac address {destination_mac:?}");
+
+                        if let Some(switch_id) = {
+                            let switch_table = switch_table.read().await;
+
+                            switch_table.get(&destination_mac).copied()
+                        } {
+                            let client_table = client_table.read().await;
+
+                            if let Some(client) = client_table.get(&switch_id) {
+                                if let Err(error) = client.send(packet).await {
+                                    tracing::error!(
+                                        "Can't send packet to client {switch_id} for vrf {}: {error}",
+                                        vrf.name
+                                    )
+                                }
+                            }
+                        } else {
+                            broadcast_to_vrf(&vrf, packet, client_table.clone()).await;
+                        }
+                    }
+
+                    buffer.clear();
                 }
             }
         }
     });
 
-    let mut buffer = [0u8; MAX_BUFFER_SIZE];
+    while let Some((switch_id, data)) = receiver.recv().await {
+        let source_mac = get_source_mac(&data);
 
-    loop {
-        if let Ok(length) = tap.recv(&mut buffer).await {
-            if length == 0 {
-                continue;
-            }
+        tracing::debug!("Source mac address {source_mac:?}");
 
-            let buffer = &mut buffer[..length];
+        {
+            let mut switch_table = switch_table.write().await;
 
-            if length >= 14 {
-                let packet = Packet::from(Data {
-                    vrf_id: vrf.id,
-                    data: buffer.to_vec(),
-                });
-                let destination_mac = get_destination_mac(&buffer);
+            switch_table.insert(source_mac, switch_id);
+        }
 
-                tracing::debug!("Destination mac address {destination_mac:?}");
-
-                if let Some(switch_id) = {
-                    let switch_table = switch_table.read().await;
-
-                    switch_table.get(&destination_mac).copied()
-                } {
-                    let client_table = client_table.read().await;
-
-                    if let Some(client) = client_table.get(&switch_id) {
-                        if let Err(error) = client.send(packet).await {
-                            tracing::error!(
-                                "Can't send packet to client {switch_id} for vrf {}: {error}",
-                                vrf.name
-                            )
-                        }
-                    }
-                } else {
-                    broadcast_to_vrf(&vrf, packet, client_table.clone()).await;
-                }
-            }
-
-            buffer.clear();
+        if let Err(error) = tap.send(&data).await {
+            tracing::error!(
+                "Can't send data through tap iterface for vrf {}: {error}",
+                vrf.name
+            );
         }
     }
+
+    receiver_task.abort();
 }
 
 fn get_destination_mac(buffer: &[u8]) -> [u8; 6] {
