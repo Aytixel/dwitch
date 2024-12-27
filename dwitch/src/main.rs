@@ -20,9 +20,9 @@ const MAX_BUFFER_SIZE: usize = 65535;
 async fn main() -> eyre::Result<()> {
     color_eyre::install()?;
 
-    #[cfg(feature = "debug_console")]
+    #[cfg(feature = "tokio-console")]
     console_subscriber::init();
-    #[cfg(not(feature = "debug_console"))]
+    #[cfg(not(feature = "tokio-console"))]
     tracing_subscriber::registry()
         .with(EnvFilter::from_env("DWITCH_LOG"))
         .with(tracing_subscriber::fmt::layer())

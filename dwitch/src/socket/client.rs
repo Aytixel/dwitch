@@ -1,17 +1,23 @@
-use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
+use std::{collections::HashMap, net::SocketAddr, sync::Arc};
 
-use protocol::{Packet, PacketSerializer, Vrf};
+use protocol::{Packet, Ping, Vrf};
 use tokio::{
-    io::AsyncWriteExt,
     net::TcpStream,
+    select, spawn,
     sync::{
         mpsc::{channel, Sender},
         RwLock,
     },
-    time::sleep,
+    time::{sleep, sleep_until, Instant},
 };
 
-use crate::{config::SwitchId, socket::exchange_switch_id};
+use crate::{
+    config::SwitchId,
+    socket::{
+        exchange_switch_id, TransmitPacket, CONNECTION_RETRY_INTERVAL, PING_INTERVAL, PING_TIMEOUT,
+    },
+    MAX_BUFFER_SIZE,
+};
 
 pub type ClientTable = HashMap<SwitchId, Sender<Packet>>;
 
@@ -21,13 +27,14 @@ pub async fn client(
     client_table: Arc<RwLock<ClientTable>>,
 ) {
     let (sender, mut receiver) = channel::<Packet>(32);
+    let mut buffer = [0u8; MAX_BUFFER_SIZE];
 
     loop {
         let mut stream = match TcpStream::connect(address).await {
             Ok(stream) => stream,
             Err(error) => {
                 tracing::warn!("Can't connect to {address}: {error}");
-                sleep(Duration::from_secs(1)).await;
+                sleep(CONNECTION_RETRY_INTERVAL).await;
                 continue;
             }
         };
@@ -46,9 +53,34 @@ pub async fn client(
             client_table.insert(switch_id, sender.clone());
         }
 
-        while let Some(packet) = receiver.recv().await {
-            if let Err(error) = stream.write_all(&packet.serialize()).await {
-                tracing::warn!("Failed to send packet to {address}: {error}");
+        spawn({
+            let sender = sender.clone();
+
+            async move {
+                while let Ok(()) = sender.send(Packet::Ping(Ping)).await {
+                    sleep(PING_INTERVAL).await;
+                }
+            }
+        });
+
+        let mut ping_timeout = Instant::now() + PING_TIMEOUT;
+
+        loop {
+            select! {
+                Some(packet) = receiver.recv() => {
+                    stream.send_packet(packet).await;
+                }
+                Some(Packet::Ping(Ping)) = stream.recv_packet(&mut buffer) => {
+                    ping_timeout = Instant::now() + PING_TIMEOUT;
+                }
+                _ = sleep_until(ping_timeout) => {
+                    tracing::warn!("Client connection closed, ping timed out");
+                    break
+                },
+                else => {
+                    tracing::warn!("Client connection closed");
+                    break
+                },
             }
         }
     }

@@ -1,10 +1,10 @@
 use std::{error::Error, sync::Arc, time::Duration};
 
-use protocol::{Packet, PacketSerializer, Ping, VrfAction};
+use protocol::{Packet, Ping, VrfAction};
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
+    io::AsyncWriteExt,
     net::{TcpListener, TcpStream},
-    spawn,
+    select, spawn,
     sync::RwLock,
     time::sleep,
 };
@@ -12,9 +12,9 @@ use tokio::{
 use crate::{
     cache::{SwitchTable, VrfTable},
     config::{Config, SwitchId},
-    socket::exchange_switch_id,
+    socket::{exchange_switch_id, TransmitPacket, PING_TIMEOUT},
     tap::{tap, TapTable},
-    BufferExt, MAX_BUFFER_SIZE,
+    MAX_BUFFER_SIZE,
 };
 
 use super::client::ClientTable;
@@ -71,57 +71,41 @@ async fn server_connection(
     let mut buffer = [0u8; MAX_BUFFER_SIZE];
 
     loop {
-        let length = match stream.read(&mut buffer).await {
-            Ok(length) => length,
-            Err(error) => {
-                tracing::error!("Server read error: {error}");
-                continue;
-            }
+        let packet = select! {
+            Some(packet) = stream.recv_packet(&mut buffer) => packet,
+            _ = sleep(PING_TIMEOUT) => {
+                tracing::warn!("Server connection closed, ping timed out");
+                break
+            },
+            else => {
+                tracing::warn!("Server connection closed");
+                break
+            },
         };
-
-        if length == 0 {
-            break;
-        }
-
-        let buffer = buffer[..length].as_mut();
-        let packet = match Packet::deserialize(&buffer) {
-            Ok(packet) => packet,
-            Err(error) => {
-                tracing::error!("Can't deserialize packet: {error}");
-                buffer.clear();
-                continue;
-            }
-        };
-
-        buffer.clear();
 
         tracing::debug!("{packet:?}");
 
         match packet {
-            Packet::Ping(Ping) => unimplemented!(),
+            Packet::Ping(Ping) => {
+                stream.send_packet(Ping).await;
+
+                if let Err(error) = stream.flush().await {
+                    tracing::warn!("Can't send ping: {error}");
+                }
+            }
             Packet::VrfAction(vrf_action) => match vrf_action {
                 VrfAction::List(vrf_list) => {
                     let vrf_table = vrf_table.read().await;
 
                     for vrf_list_chunk in vrf_table.values().cloned().collect::<Vec<_>>().chunks(10)
                     {
-                        if let Err(error) = stream
-                            .write_all(
-                                &Packet::from(VrfAction::List(Some(vrf_list_chunk.to_vec())))
-                                    .serialize(),
-                            )
-                            .await
-                        {
-                            tracing::warn!("Can't send vrf list: {error}");
-                        }
+                        stream
+                            .send_packet(VrfAction::List(Some(vrf_list_chunk.to_vec())))
+                            .await;
                     }
 
-                    if let Err(error) = stream
-                        .write_all(&Packet::from(VrfAction::List(Some(Vec::new()))).serialize())
-                        .await
-                    {
-                        tracing::warn!("Can't send vrf list: {error}");
-                    }
+                    stream.send_packet(VrfAction::List(Some(Vec::new()))).await;
+
                     if let Err(error) = stream.flush().await {
                         tracing::warn!("Can't send vrf list: {error}");
                     }
