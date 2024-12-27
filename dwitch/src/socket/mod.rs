@@ -11,8 +11,8 @@ use crate::{config::SwitchId, BufferExt, MAX_BUFFER_SIZE};
 pub mod client;
 pub mod server;
 
-const CONNECTION_RETRY_INTERVAL: Duration = Duration::from_secs(1);
-const PING_INTERVAL: Duration = Duration::from_secs(1);
+const CONNECTION_RETRY_INTERVAL: Duration = Duration::from_secs(2);
+const PING_INTERVAL: Duration = Duration::from_secs(2);
 const PING_TIMEOUT: Duration = Duration::from_secs(10);
 
 async fn exchange_switch_id(stream: &mut TcpStream, switch_id: SwitchId) -> Option<SwitchId> {

@@ -9,7 +9,7 @@ use crate::config::SwitchId;
 
 const CACHE_PATH: &str = "/var/cache/dwitch.cache";
 
-pub type SwitchTable = HashMap<[u8; 6], SwitchId>;
+pub type SwitchTable = HashMap<VrfId, HashMap<[u8; 6], SwitchId>>;
 pub type VrfTable = HashMap<VrfId, Vrf>;
 
 #[derive(Debug, Default, Deserialize, Serialize)]

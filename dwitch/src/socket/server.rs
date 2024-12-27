@@ -184,9 +184,11 @@ async fn process_vrf_action(
         VrfAction::Delete { id } => {
             let mut vrf_table = vrf_table.write().await;
             let mut tap_table = tap_table.write().await;
+            let mut switch_table = switch_table.write().await;
 
             tap_table.remove(&id);
             vrf_table.remove(&id);
+            switch_table.remove(&id);
         }
         VrfAction::AddMember { id, members } => {
             let mut vrf_table = vrf_table.write().await;

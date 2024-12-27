@@ -103,7 +103,9 @@ async fn tap_connection(
                         if let Some(switch_id) = {
                             let switch_table = switch_table.read().await;
 
-                            switch_table.get(&destination_mac).copied()
+                            switch_table.get(&vrf.id).and_then(|vrf_switch_table| {
+                                vrf_switch_table.get(&destination_mac).copied()
+                            })
                         } {
                             let client_table = client_table.read().await;
 
@@ -134,7 +136,10 @@ async fn tap_connection(
         {
             let mut switch_table = switch_table.write().await;
 
-            switch_table.insert(source_mac, switch_id);
+            switch_table
+                .entry(vrf.id)
+                .or_default()
+                .insert(source_mac, switch_id);
         }
 
         if let Err(error) = tap.send(&data).await {
