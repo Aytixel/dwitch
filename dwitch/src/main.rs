@@ -1,7 +1,6 @@
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use cache::Cache;
-use clap::Parser;
 use config::Config;
 use protocol::CONFIGURATION_SWITCH_ID;
 use socket::{client::client, server::server};
@@ -28,8 +27,7 @@ async fn main() -> eyre::Result<()> {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    // let config = Config::load()?;
-    let config = Config::parse();
+    let config = Config::load().await?;
 
     tracing::info!("{config:#?}");
 

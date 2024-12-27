@@ -7,8 +7,6 @@ edition = "2021"
 tokio-console = ["dep:console-subscriber"]
 
 [dependencies]
-clap = { version = "4.5", features = ["derive"] }
-
 eyre = "0.6"
 color-eyre = { version = "0.6", default-features = false }
 
